@@ -1,0 +1,108 @@
+name: CI - Build, Scan, Publish
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-scan-publish:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [api, worker, frontend]
+      fail-fast: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.service }}/package-lock.json
+
+      - name: Install dependencies (build verification)
+        working-directory: ${{ matrix.service }}
+        run: npm ci
+
+      - name: Basic syntax check (automated test gate)
+        working-directory: ${{ matrix.service }}
+        run: find src -name "*.js" -exec node --check {} \;
+
+      - name: Normalize registry owner to lowercase
+        run: echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build production image (local, for scanning)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service }}
+          file: ${{ matrix.service }}/Containerfile
+          target: runtime
+          push: false
+          load: true
+          tags: ghcr.io/${{ env.OWNER_LC }}/ticketing-${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      # Uvijek generiraj puni izvjestaj (za docs/security/image-scan-report.md), neovisno o tome puca li quality gate
+      - name: Generate full Trivy report (record-keeping)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ghcr.io/${{ env.OWNER_LC }}/ticketing-${{ matrix.service }}:${{ github.sha }}
+          format: table
+          output: trivy-report-${{ matrix.service }}.txt
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+
+      - name: Upload Trivy report as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report-${{ matrix.service }}
+          path: trivy-report-${{ matrix.service }}.txt
+          retention-days: 30
+
+      # Quality gate: build PUCA ako ima CRITICAL/HIGH ranjivosti s dostupnim popravkom
+      - name: Trivy quality gate (CRITICAL/HIGH)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ghcr.io/${{ env.OWNER_LC }}/ticketing-${{ matrix.service }}:${{ github.sha }}
+          format: table
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Objava SAMO nakon prolaska quality gatea, i samo na main grani
+      - name: Publish image to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service }}
+          file: ${{ matrix.service }}/Containerfile
+          target: runtime
+          push: true
+          tags: |
+            ghcr.io/${{ env.OWNER_LC }}/ticketing-${{ matrix.service }}:${{ github.sha }}
+            ghcr.io/${{ env.OWNER_LC }}/ticketing-${{ matrix.service }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}

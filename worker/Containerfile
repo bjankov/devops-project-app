@@ -13,12 +13,15 @@ COPY src ./src
 USER node
 CMD ["npm", "run", "dev"]
 
-FROM node:24-alpine AS runtime
+FROM alpine:latest AS runtime
 RUN apk update && apk upgrade --no-cache \
-    && rm -rf /usr/local/lib/node_modules/npm \
-    && rm -f /usr/local/bin/npm /usr/local/bin/npx
+    && apk add --no-cache libstdc++ libgcc \
+    && addgroup -g 1000 node \
+    && adduser -u 1000 -G node -s /bin/sh -D node
+
 WORKDIR /app
 ENV NODE_ENV=production
+COPY --from=deps /usr/local/bin/node /usr/local/bin/
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package*.json ./
 COPY --chown=node:node src ./src

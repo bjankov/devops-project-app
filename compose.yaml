@@ -26,6 +26,7 @@ services:
   api:
     build:
       context: ./api
+      dockerfile: Containerfile
       target: dev
     env_file: .env
     ports:
@@ -42,6 +43,7 @@ services:
   worker:
     build:
       context: ./worker
+      dockerfile: Containerfile
       target: dev
     env_file: .env
     volumes:
@@ -56,6 +58,7 @@ services:
   frontend:
     build:
       context: ./frontend
+      dockerfile: Containerfile
       target: dev
     env_file: .env
     environment:

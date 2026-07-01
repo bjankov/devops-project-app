@@ -1,10 +1,11 @@
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 LABEL authors="bjankov"
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-FROM node:20-alpine AS dev
+FROM node:24-alpine AS dev
+RUN apk update && apk upgrade --no-cache
 WORKDIR /app
 ENV NODE_ENV=development
 COPY package*.json ./
@@ -14,7 +15,10 @@ USER node
 EXPOSE 8080
 CMD ["npm", "run", "dev"]
 
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
+RUN apk update && apk upgrade --no-cache \
+    && rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
